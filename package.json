@@ -1,0 +1,16 @@
+{
+  "name": "raid-bot-simple",
+  "version": "1.0.0",
+  "description": "Simple in-memory Telegram Raid Bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "author": "Peppa",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "node-telegram-bot-api": "^0.61.0",
+    "puppeteer": "^19.11.1"
+  }
+}
