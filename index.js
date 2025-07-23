@@ -1,4 +1,10 @@
-require('dotenv').config();
+from pathlib import Path
+
+# Caminho do arquivo
+file_path = Path("/mnt/data/raid_bot_fixed.js")
+
+# Código completo com as alterações solicitadas
+code = """require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const puppeteer = require('puppeteer');
 
@@ -64,22 +70,25 @@ if (!TOKEN) {
 
   function buildStatus(cur, tgt, url) {
     const rows = [
-      ['Likes',    cur.likes,   tgt.likes],
-      ['Replies',  cur.replies, tgt.replies],
-      ['Retweets', cur.retweets,tgt.retweets],
+      ['Likes',    cur.likes,    tgt.likes],
+      ['Replies',  cur.replies,  tgt.replies],
+      ['Retweets', cur.retweets, tgt.retweets],
     ];
+
     const labelWidth = Math.max(...rows.map(r => r[0].length));
     const countWidth = Math.max(...rows.map(r => `${r[1]}/${r[2]}`.length));
-    const pctWidth = 4;
+    const pctWidth   = 5;
 
     let text = '';
-    for (const [label, c, t] of rows) {
+    for (const [label, current, target] of rows) {
       const labelCol = label.padEnd(labelWidth);
-      const countCol = `${c}/${t}`.padStart(countWidth);
-      const pctCol = `${((c / t) * 100).toFixed(0)}%`.padStart(pctWidth);
-      text += `${getColorSquare(c,t)} ${labelCol} | ${countCol} ${pctCol}\n`;
+      const pct = (target === 0) ? 100 : Math.min(100, (current / target) * 100);
+      const pctCol = `${pct.toFixed(0)}%`.padStart(pctWidth);
+      const countCol = `${current}/${target}`.padStart(countWidth);
+      const square = target === 0 ? '🟩' : getColorSquare(current, target);
+      text += `${square} ${labelCol} | ${countCol} ${pctCol}\\n`;
     }
-    text += `\n[🔗 Tweet Link](${url})`;
+    text += `\\n[🔗 Tweet Link](${url})`;
     return text;
   }
 
@@ -116,7 +125,7 @@ if (!TOKEN) {
     }
   }
 
-  bot.onText(/\/raid\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+)/, async (msg, match) => {
+  bot.onText(/\\/raid\\s+(\\S+)\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)/, async (msg, match) => {
     const chatId = msg.chat.id;
     try { await bot.deleteMessage(chatId, msg.message_id); } catch {}
     if (raids.has(chatId)) {
@@ -127,9 +136,9 @@ if (!TOKEN) {
     const initial = { likes:0, replies:0, retweets:0 };
     const phrase = updatePhrases[Math.floor(Math.random()*updatePhrases.length)];
 
-    const startCaption = `*${phrase}*\n` +
+    const startCaption = `*${phrase}*\\n` +
       buildStatus(initial, targets, url) +
-      `\n_⚡️ Powered by Singularity_`;
+      `\\n_⚡️ Powered by Singularity_`;
 
     const sent = await bot.sendVideo(chatId, RAID_START_GIF, {
       ...MARKDOWN,
@@ -147,7 +156,7 @@ if (!TOKEN) {
     });
   });
 
-  bot.onText(/\/cancel/, async (msg) => {
+  bot.onText(/\\/cancel/, async (msg) => {
     const chatId = msg.chat.id;
     if (!raids.has(chatId)) {
       return bot.sendMessage(chatId, '❌ No active raid to cancel.');
@@ -167,18 +176,24 @@ if (!TOKEN) {
 
         if (done) {
           const comp = completionPhrases[Math.floor(Math.random()*completionPhrases.length)];
-          const rows = [['Likes',L,LT],['Replies',R,RT],['Retweets',T,TT]];
-          const w1 = Math.max(...rows.map(r=>r[0].length));
-          const w2 = Math.max(...rows.map(r=>`${r[1]}/${r[2]}`.length));
+          const rows = [['Likes', L, LT], ['Replies', R, RT], ['Retweets', T, TT]];
+          const labelWidth = Math.max(...rows.map(r => r[0].length));
+          const countWidth = Math.max(...rows.map(r => `${r[1]}/${r[2]}`.length));
+          const pctWidth = 5;
           let finalText = '';
-          for (const [lab,c,t] of rows) {
-            const col1 = lab.padEnd(w1);
-            const col2 = `${c}/${t}`.padStart(w2);
-            finalText += `${getColorSquare(c,t)} ${col1} | ${col2}\n`;
+
+          for (const [label, current, target] of rows) {
+            const pct = (target === 0) ? 100 : Math.min(100, (current / target) * 100);
+            const labelCol = label.padEnd(labelWidth);
+            const countCol = `${current}/${target}`.padStart(countWidth);
+            const pctCol = `${pct.toFixed(0)}%`.padStart(pctWidth);
+            const square = target === 0 ? '🟩' : getColorSquare(current, target);
+            finalText += `${square} ${labelCol} | ${countCol} ${pctCol}\\n`;
           }
-          const completeCaption = `*${comp}*\n` +
+
+          const completeCaption = `*${comp}*\\n` +
             finalText +
-            `\n_⚡️ Powered by Singularity_`;
+            `\\n_⚡️ Powered by Singularity_`;
 
           try { await bot.deleteMessage(chatId, raid.statusMessageId); } catch {}
           await bot.sendVideo(chatId, RAID_COMPLETE_GIF, {
@@ -187,7 +202,6 @@ if (!TOKEN) {
             caption: completeCaption
           });
           raids.delete(chatId);
-
         } else {
           let updatePhrase = updatePhrases[Math.floor(Math.random()*updatePhrases.length)];
           const rowsText = buildStatus(cur, raid.targets, raid.tweetUrl);
@@ -200,9 +214,9 @@ if (!TOKEN) {
             updatePhrase = delayPhrases[Math.floor(Math.random()*delayPhrases.length)];
             raid.delayNotified = true;
           }
-          const progressCaption = `*${updatePhrase}*\n` +
+          const progressCaption = `*${updatePhrase}*\\n` +
             rowsText +
-            `\n_⚡️ Powered by Singularity_`;
+            `\\n_⚡️ Powered by Singularity_`;
 
           try { await bot.deleteMessage(chatId, raid.statusMessageId); } catch {}
           const nm = await bot.sendVideo(chatId, RAID_PROGRESS_GIF, {
@@ -222,3 +236,8 @@ if (!TOKEN) {
 
   pollLoop();
 })();
+"""
+
+# Escrevendo o código no arquivo
+file_path.write_text(code)
+file_path
