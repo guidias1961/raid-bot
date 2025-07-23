@@ -58,29 +58,35 @@ if (!TOKEN) {
 
   function getColorSquare(current, target) {
     if (current >= target) return '🟩';
-    const pct = (current / target) * 100;
+    const pct = (target === 0 ? 0 : (current / target) * 100);
     return pct <= 33 ? '🟥' : '🟨';
   }
 
   function buildStatus(cur, tgt, url) {
     const rows = [
-      ['Likes',    cur.likes,    tgt.likes],
-      ['Replies',  cur.replies,  tgt.replies],
-      ['Retweets', cur.retweets, tgt.retweets],
+      ['Likes',    cur.likes,    tgt.likes  || 0],
+      ['Replies',  cur.replies,  tgt.replies|| 0],
+      ['Retweets', cur.retweets, tgt.retweets|| 0],
     ];
-
     const labelWidth = Math.max(...rows.map(r => r[0].length));
-    const countWidth = Math.max(...rows.map(r => `${r[1]}/${r[2]}`.length));
-    const pctWidth   = 5;
+    const countStrings = rows.map(r => `${r[1]}/${r[2]}`);
+    const countWidth = Math.max(...countStrings.map(s => s.length));
+    const pctWidth = 4; // e.g. "100%"
 
     let text = '';
-    for (const [label, current, target] of rows) {
+    for (const [label, c, t] of rows) {
       const labelCol = label.padEnd(labelWidth);
-      const pct = (target === 0) ? 100 : Math.min(100, (current / target) * 100);
-      const pctCol = `${pct.toFixed(0)}%`.padStart(pctWidth);
-      const countCol = `${current}/${target}`.padStart(countWidth);
-      const square = target === 0 ? '🟩' : getColorSquare(current, target);
-      text += `${square} ${labelCol} | ${countCol} ${pctCol}\n`;
+      const countRaw = `${c}/${t}`;
+      const countCol = countRaw.padStart(countWidth);
+      let pctNum;
+      if (!t || t === 0) {
+        pctNum = 100;
+      } else {
+        pctNum = Math.min((c / t) * 100, 100);
+      }
+      const pctRaw = `${pctNum.toFixed(0)}%`;
+      const pctCol = pctRaw.padStart(pctWidth);
+      text += `${getColorSquare(c, t)} ${labelCol} | ${countCol} ${pctCol}\n`;
     }
     text += `\n[🔗 Tweet Link](${url})`;
     return text;
@@ -166,25 +172,27 @@ if (!TOKEN) {
         const cur = await fetchMetrics(raid.tweetUrl);
         const { likes:L, replies:R, retweets:T } = cur;
         const { likes:LT, replies:RT, retweets:TT } = raid.targets;
-        const done = L>=LT && R>=RT && T>=TT;
+        const done = L >= LT && R >= RT && T >= TT;
 
         if (done) {
           const comp = completionPhrases[Math.floor(Math.random()*completionPhrases.length)];
+          // Reuse buildStatus but omit link
           const rows = [['Likes', L, LT], ['Replies', R, RT], ['Retweets', T, TT]];
-          const labelWidth = Math.max(...rows.map(r => r[0].length));
-          const countWidth = Math.max(...rows.map(r => `${r[1]}/${r[2]}`.length));
-          const pctWidth = 5;
+          const labelW = Math.max(...rows.map(r => r[0].length));
+          const counts = rows.map(r => `${r[1]}/${r[2]}`);
+          const countW = Math.max(...counts.map(s => s.length));
+          const pctW = 4;
+
           let finalText = '';
-
-          for (const [label, current, target] of rows) {
-            const pct = (target === 0) ? 100 : Math.min(100, (current / target) * 100);
-            const labelCol = label.padEnd(labelWidth);
-            const countCol = `${current}/${target}`.padStart(countWidth);
-            const pctCol = `${pct.toFixed(0)}%`.padStart(pctWidth);
-            const square = target === 0 ? '🟩' : getColorSquare(current, target);
-            finalText += `${square} ${labelCol} | ${countCol} ${pctCol}\n`;
+          for (const [lab, c, t] of rows) {
+            const col1 = lab.padEnd(labelW);
+            const col2 = `${c}/${t}`.padStart(countW);
+            let pctNum;
+            if (!t || t === 0) pctNum = 100;
+            else pctNum = Math.min((c / t) * 100, 100);
+            const pct = `${pctNum.toFixed(0)}%`.padStart(pctW);
+            finalText += `${getColorSquare(c, t)} ${col1} | ${col2} ${pct}\n`;
           }
-
           const completeCaption = `*${comp}*\n` +
             finalText +
             `\n_⚡️ Powered by Singularity_`;
@@ -196,10 +204,11 @@ if (!TOKEN) {
             caption: completeCaption
           });
           raids.delete(chatId);
+
         } else {
           let updatePhrase = updatePhrases[Math.floor(Math.random()*updatePhrases.length)];
           const rowsText = buildStatus(cur, raid.targets, raid.tweetUrl);
-          const avgPct = ((L/LT)+(R/RT)+(T/TT))/3*100;
+          const avgPct = ((L / LT) + (R / RT) + (T / TT)) / 3 * 100;
           if (!raid.halfwayNotified && avgPct >= 50) {
             updatePhrase = halfwayPhrases[Math.floor(Math.random()*halfwayPhrases.length)];
             raid.halfwayNotified = true;
