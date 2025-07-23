@@ -128,7 +128,7 @@ if (!TOKEN) {
 
     const statusRaw = buildStatus(initial, targets);
     const statusLines = statusRaw.split('\n').map(l => `<code>${l}</code>`).join('\n');
-    const startCaption = `<b>${phrase}</b>\n${statusLines}\n\n${url}\n<em>⚡️ Powered by Singularity</em>`;
+    const startCaption = `<b>${phrase}</b>\n\n${statusLines}\n\n${url}\n<em>⚡️ Powered by Singularity</em>`;
 
     const sent = await bot.sendVideo(chatId, RAID_START_GIF, {
       ...MARKDOWN,
@@ -168,7 +168,7 @@ if (!TOKEN) {
           const comp = completionPhrases[Math.floor(Math.random()*completionPhrases.length)];
           const finalRaw = buildStatus(cur, raid.targets);
           const finalLines = finalRaw.split('\n').map(l => `<code>${l}</code>`).join('\n');
-          const completeCaption = `<b>${comp}</b>\n${finalLines}\n<em>⚡️ Powered by Singularity</em>`;
+          const completeCaption = `<b>${comp}</b>\n\n${finalLines}\n\n<em>⚡️ Powered by Singularity</em>`;
 
           try { await bot.deleteMessage(chatId, raid.statusMessageId); } catch {}
           await bot.sendVideo(chatId, RAID_COMPLETE_GIF, {
@@ -191,7 +191,7 @@ if (!TOKEN) {
           }
           const rawLines = buildStatus(cur, raid.targets);
           const codeLines = rawLines.split('\n').map(l => `<code>${l}</code>`).join('\n');
-          const progressCaption = `<b>${updatePhrase}</b>\n${codeLines}\n\n${raid.tweetUrl}\n<em>⚡️ Powered by Singularity</em>`;
+          const progressCaption = `<b>${updatePhrase}</b>\n\n${codeLines}\n\n${raid.tweetUrl}\n<em>⚡️ Powered by Singularity</em>`;
 
           try { await bot.deleteMessage(chatId, raid.statusMessageId); } catch {}
           const nm = await bot.sendVideo(chatId, RAID_PROGRESS_GIF, {
