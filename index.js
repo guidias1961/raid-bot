@@ -7,7 +7,6 @@ const POLL_INTERVAL = process.env.POLL_INTERVAL_MS
   ? Number(process.env.POLL_INTERVAL_MS)
   : 30000;
 
-// Substitua pelos links diretos aos arquivos .mp4
 const RAID_START_GIF    = 'https://i.imgur.com/yHCBSBX.mp4';
 const RAID_PROGRESS_GIF = 'https://i.imgur.com/fyTOI2F.mp4';
 const RAID_COMPLETE_GIF = 'https://i.imgur.com/W2R8TcT.mp4';
@@ -71,19 +70,16 @@ if (!TOKEN) {
     const labelWidth = Math.max(...rows.map(r => r[0].length));
     const countStrings = rows.map(r => `${r[1]}/${r[2]}`);
     const countWidth = Math.max(...countStrings.map(s => s.length));
-    const pctWidth = 4; // e.g. "100%"
+    const pctWidth = 4;
 
-    let text = '';
-    for (const [label, c, t] of rows) {
+    return rows.map(([label, c, t]) => {
       const labelCol = label.padEnd(labelWidth);
       const countRaw = `${c}/${t}`;
       const countCol = countRaw.padStart(countWidth);
       const pctNum = t === 0 ? 100 : Math.min((c / t) * 100, 100);
-      const pctRaw = `${pctNum.toFixed(0)}%`;
-      const pctCol = pctRaw.padStart(pctWidth);
-      text += `${getColorSquare(c, t)} ${labelCol} | ${countCol} ${pctCol}\n`;
-    }
-    return text;
+      const pctRaw = `${pctNum.toFixed(0)}%`.padStart(pctWidth);
+      return `${getColorSquare(c, t)} ${labelCol} | ${countCol} ${pctRaw}`;
+    }).join('\n');
   }
 
   async function fetchMetrics(url) {
@@ -130,8 +126,9 @@ if (!TOKEN) {
     const initial = { likes:0, replies:0, retweets:0 };
     const phrase = updatePhrases[Math.floor(Math.random()*updatePhrases.length)];
 
-    const status = buildStatus(initial, targets);
-    const startCaption = `<b>${phrase}</b>\n<pre>${status}</pre><a href="${url}">🔗 Tweet Link</a>\n<em>⚡️ Powered by Singularity</em>`;
+    const statusRaw = buildStatus(initial, targets);
+    const statusLines = statusRaw.split('\n').map(l => `<code>${l}</code>`).join('\n');
+    const startCaption = `<b>${phrase}</b>\n${statusLines}\n<a href="${url}">🔗 Tweet Link</a>\n<em>⚡️ Powered by Singularity</em>`;
 
     const sent = await bot.sendVideo(chatId, RAID_START_GIF, {
       ...MARKDOWN,
@@ -169,8 +166,9 @@ if (!TOKEN) {
 
         if (done) {
           const comp = completionPhrases[Math.floor(Math.random()*completionPhrases.length)];
-          const finalStatus = buildStatus(cur, raid.targets);
-          const completeCaption = `<b>${comp}</b>\n<pre>${finalStatus}</pre><em>⚡️ Powered by Singularity</em>`;
+          const finalRaw = buildStatus(cur, raid.targets);
+          const finalLines = finalRaw.split('\n').map(l => `<code>${l}</code>`).join('\n');
+          const completeCaption = `<b>${comp}</b>\n${finalLines}\n<em>⚡️ Powered by Singularity</em>`;
 
           try { await bot.deleteMessage(chatId, raid.statusMessageId); } catch {}
           await bot.sendVideo(chatId, RAID_COMPLETE_GIF, {
@@ -182,7 +180,7 @@ if (!TOKEN) {
 
         } else {
           let updatePhrase = updatePhrases[Math.floor(Math.random()*updatePhrases.length)];
-          const avgPct = ((L/ (LT||1)) + (R/(RT||1)) + (T/(TT||1))) / 3 * 100;
+          const avgPct = ((L/(LT||1)) + (R/(RT||1)) + (T/(TT||1))) / 3 * 100;
           if (!raid.halfwayNotified && avgPct >= 50) {
             updatePhrase = halfwayPhrases[Math.floor(Math.random()*halfwayPhrases.length)];
             raid.halfwayNotified = true;
@@ -191,8 +189,9 @@ if (!TOKEN) {
             updatePhrase = delayPhrases[Math.floor(Math.random()*delayPhrases.length)];
             raid.delayNotified = true;
           }
-          const rowsText = buildStatus(cur, raid.targets);
-          const progressCaption = `<b>${updatePhrase}</b>\n<pre>${rowsText}</pre><a href="${raid.tweetUrl}">🔗 Tweet Link</a>\n<em>⚡️ Powered by Singularity</em>`;
+          const rawLines = buildStatus(cur, raid.targets);
+          const codeLines = rawLines.split('\n').map(l => `<code>${l}</code>`).join('\n');
+          const progressCaption = `<b>${updatePhrase}</b>\n${codeLines}\n<a href="${raid.tweetUrl}">🔗 Tweet Link</a>\n<em>⚡️ Powered by Singularity</em>`;
 
           try { await bot.deleteMessage(chatId, raid.statusMessageId); } catch {}
           const nm = await bot.sendVideo(chatId, RAID_PROGRESS_GIF, {
