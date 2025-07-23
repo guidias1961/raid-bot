@@ -31,15 +31,15 @@ if (!TOKEN) {
   bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     const instructions =
-      `<b>Welcome to Sing Raid Bot!</b>\n\n` +
-      `Use this bot to track a raid on a tweet by monitoring likes, replies, and retweets.\n\n` +
+      `<b>Welcome to Raid Bot!</b>\n\n` +
+      `Track a raid on a tweet by monitoring likes, replies, and retweets.\n\n` +
       `<b>Available commands:</b>\n` +
-      `/raid <tweet_URL> <like_target> <reply_target> <retweet_target>\n` +
+      `<code>/raid tweet_URL like_target reply_target retweet_target</code>\n` +
       `    Starts a raid on the specified tweet.\n` +
-      `/cancel\n` +
+      `<code>/cancel</code>\n` +
       `    Cancels the active raid in this chat.\n\n` +
       `<b>Example:</b>\n` +
-      `/raid https://twitter.com/user/status/1234567890 100 50 20`;
+      `<code>/raid https://twitter.com/user/status/1234567890 100 50 20</code>`;
     bot.sendMessage(chatId, instructions, MARKDOWN);
   });
 
