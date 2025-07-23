@@ -27,6 +27,22 @@ if (!TOKEN) {
   const raids = new Map();
   const MARKDOWN = { parse_mode: 'HTML', disable_web_page_preview: true };
 
+  // English /start handler
+  bot.onText(/\/start/, (msg) => {
+    const chatId = msg.chat.id;
+    const instructions =
+      `<b>Welcome to Sing Raid Bot!</b>\n\n` +
+      `Use this bot to track a raid on a tweet by monitoring likes, replies, and retweets.\n\n` +
+      `<b>Available commands:</b>\n` +
+      `/raid <tweet_URL> <like_target> <reply_target> <retweet_target>\n` +
+      `    Starts a raid on the specified tweet.\n` +
+      `/cancel\n` +
+      `    Cancels the active raid in this chat.\n\n` +
+      `<b>Example:</b>\n` +
+      `/raid https://twitter.com/user/status/1234567890 100 50 20`;
+    bot.sendMessage(chatId, instructions, MARKDOWN);
+  });
+
   const halfwayPhrases = [
     '⚡ Throughput at 50%. Initiating next-tier protocols.',
     '⚡ Systems at half capacity. Deploying auxiliary processes.',
