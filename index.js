@@ -69,13 +69,12 @@ function saveGroupLinks() {
   const raids = new Map();
 
   // Set bot commands for auto-complete
-  await bot.setMyCommands([
-    { command: 'raid', description: 'Start a new raid' },
-    { command: 'cancel', description: 'Cancel current raid' },
-    { command: 'trending', description: 'Show leaderboard' },
-    { command: 'tutorial', description: 'How to use the bot' },
-    { command: 'setgrouplink', description: 'Set group invite link' }
-  ]);
+await bot.setMyCommands([
+  { command: 'raid', description: 'Start a new raid' },
+  { command: 'cancel', description: 'Cancel current raid' },
+  { command: 'tutorial', description: 'How to use the bot' },
+  { command: 'setgrouplink', description: 'Set group invite link' }
+]);
 
   // Constants for messages and media
   const MARKDOWN = { parse_mode: 'HTML', disable_web_page_preview: false };
@@ -403,10 +402,6 @@ To get featured in trending:
     }
   });
 
-  // Trending command handler
-  bot.onText(/\/trending/, async msg => {
-    await postTrending(msg.chat.id, true);
-  });
 
   // Post trending leaderboard with decay after 1 hour
   async function postTrending(chatId, pin = false) {
