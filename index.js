@@ -642,9 +642,10 @@ To get featured in trending:
   }
 
   // ======= NOVO: Scheduler com jitter para não bater padrão exato =======
-  const BASE = POLL_MS;
-  const JITTER = 5000; // ±5s
-  const nextDelay = () => BASE + Math.floor((Math.random() * 2 - 1) * JITTER);
+const BASE = Math.round(POLL_MS * 1.5);   // aumenta o intervalo médio
+const JITTER = 15000;                     // ±15s de variação
+const nextDelay = () => BASE + Math.floor((Math.random() * 2 - 1) * JITTER);
+
 
   async function scheduler() {
     try {
