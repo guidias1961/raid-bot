@@ -13,7 +13,7 @@ const TREND_CH = process.env.TRENDING_CHANNEL_ID;
 const STATS_FILE = './raid-stats.json';
 const GROUP_LINKS_FILE = './group-links.json';
 
-// ======= Concorrência do scraper =======
+// ======= NOVO: Controle de concorrência =======
 const CONCURRENCY = process.env.SCRAPE_CONCURRENCY ? Number(process.env.SCRAPE_CONCURRENCY) : 2;
 let inFlight = 0;
 const queue = [];
@@ -30,7 +30,7 @@ async function withSlot(fn) {
   }
 }
 
-// ======= Parser robusto para contagens (K/M/B e pt-BR “mil/mi”) =======
+// ======= NOVO: Parser robusto para contagens (K/M/pt-BR) =======
 function parseCount(raw) {
   if (!raw) return 0;
   let t = String(raw).trim().toLowerCase();
@@ -41,10 +41,10 @@ function parseCount(raw) {
     .replace(/milhões|milhao|milhão|mi/g, 'm')
     .replace(/mil/g, 'k');
 
-  // Decimal vírgula → ponto
+  // Troca decimal vírgula → ponto
   t = t.replace(/(\d),(\d)/g, '$1.$2');
 
-  // número + sufixo opcional
+  // Pega "número + sufixo opcional"
   const m = t.match(/([\d.]+)\s*([kmb])?/i);
   if (!m) {
     const digits = t.replace(/[^\d]/g, '');
@@ -97,7 +97,7 @@ function saveGroupLinks() {
     process.exit(1);
   }
 
-  // ======= Página com UA/locale e bloqueio de mídia =======
+  // ======= NOVO: Função para abrir página com UA/locale e bloqueio de mídia =======
   async function newPage(browser) {
     const page = await browser.newPage();
     await page.setUserAgent(
@@ -122,15 +122,10 @@ function saveGroupLinks() {
       if (browser) {
         try { await browser.close(); } catch {}
       }
-      const launchOpts = {
+      browser = await puppeteer.launch({
         headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-      };
-      // Opcional: persistência de sessão se USER_DATA_DIR for definido
-      if (process.env.USER_DATA_DIR) {
-        launchOpts.userDataDir = process.env.USER_DATA_DIR;
-      }
-      browser = await puppeteer.launch(launchOpts);
+      });
       return browser;
     } catch (err) {
       console.error('Failed to launch browser:', err);
@@ -158,7 +153,7 @@ function saveGroupLinks() {
   const WELCOME_GIF = 'https://i.imgur.com/fyTOI2F.mp4';
   const TUTORIAL_GIF = 'https://i.imgur.com/fyTOI2F.mp4';
 
-  // Phrases
+  // Phrases for different raid states
   const updatePhrases = [
     '⚠️ Holders crave 100× but can\'t even finish a single raid.',
     '💥 You demand hypergrowth yet choke on basic execution.',
@@ -166,11 +161,13 @@ function saveGroupLinks() {
     '⚡ Failed raids detected. Upgrade your resolve, holders.',
     '🔥 Delusions of 100× are useless without completing a raid.'
   ];
+
   const halfwayPhrases = [
     '⚡ Throughput at 50%. Initiating next-tier protocols.',
     '⚡ Systems at half capacity. Deploying auxiliary processes.',
     '⚡ Performance at midpoint. Engaging advanced modules.'
   ];
+
   const delayPhrases = [
     '⏳ Temporal constraints exceeded predicted window. Accelerating algorithms.',
     '⏳ Latency detected. Boosting computational threads.',
@@ -257,36 +254,6 @@ To get featured in trending:
     if (!match) return url;
     const tweetId = match[1];
     return `https://x.com/i/status/${tweetId}`;
-  }
-
-  // ======= Helpers de URL/espera/login wall =======
-  function toMobileUrl(url) {
-    try {
-      const m = url.match(/status\/(\d+)/);
-      if (!m) return url;
-      const id = m[1];
-      return `https://mobile.twitter.com/i/status/${id}?lang=en`;
-    } catch { return url; }
-  }
-
-  async function waitForTweetHydration(page, timeout = 20000) {
-    await Promise.race([
-      page.waitForSelector('article', { timeout }),
-      page.waitForSelector('[data-testid="tweetText"]', { timeout }),
-      page.waitForSelector('main[role="main"] [role="heading"] time', { timeout })
-    ]);
-  }
-
-  async function isLoginWall(page) {
-    return await page.evaluate(() => {
-      const t = (sel) => document.querySelector(sel);
-      const txt = document.body ? document.body.innerText || '' : '';
-      return Boolean(
-        t('[data-testid="login"]') ||
-        t('form[action*="login"]') ||
-        /log in to x|sign in|entrar no x|faça login/i.test(txt)
-      );
-    });
   }
 
   // Start command
@@ -454,10 +421,7 @@ To get featured in trending:
       statusMessageId: null,
       pollCount: 0,
       halfwayNotified: false,
-      delayNotified: false,
-      // backoff por raid
-      backoffMs: 0,
-      lastAttempt: 0
+      delayNotified: false
     });
 
     const initial = { likes: 0, replies: 0, retweets: 0 };
@@ -561,101 +525,55 @@ To get featured in trending:
     }
   }
 
-  // ======= fetchMetrics com retries, fallback mobile e detecção de login =======
+  // ======= NOVO: fetchMetrics com aria-label, UA/locale e waits robustos =======
   async function fetchMetrics(url) {
     await ensureBrowser();
+    const page = await newPage(browser);
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    const attemptOnce = async (targetUrl) => {
-      const page = await newPage(browser);
-      try {
-        await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      // Garante renderização de um tweet
+      await page.waitForSelector('article', { timeout: 15000 });
 
-        // Aguarda rede ociosa se possível
-        try {
-          await page.waitForNetworkIdle({ idleTime: 750, timeout: 10000 });
-        } catch {/* ok */}
+      // Aguarda hidratação dos botões com aria-label
+      await page.waitForSelector(
+        '[data-testid="like"][aria-label], [data-testid="retweet"][aria-label], [data-testid="reply"][aria-label]',
+        { timeout: 15000 }
+      );
 
-        // Login wall?
-        if (await isLoginWall(page)) {
-          return { err: 'LOGIN_WALL' };
-        }
+      const raw = await page.evaluate(() => {
+        const get = (tid) => {
+          const btn = document.querySelector(`[data-testid="${tid}"]`);
+          if (!btn) return '';
+          return btn.getAttribute('aria-label') || btn.innerText || '';
+        };
+        return {
+          likesRaw: get('like'),
+          repliesRaw: get('reply'),
+          retweetsRaw: get('retweet')
+        };
+      });
 
-        await waitForTweetHydration(page, 20000);
+      const likes = parseCount(raw.likesRaw);
+      const replies = parseCount(raw.repliesRaw);
+      const retweets = parseCount(raw.retweetsRaw);
 
-        // Aguarda botões
-        await page.waitForSelector(
-          '[data-testid="like"], [data-testid="retweet"], [data-testid="reply"]',
-          { timeout: 15000 }
-        );
-
-        const raw = await page.evaluate(() => {
-          const get = (tid) => {
-            const btn = document.querySelector(`[data-testid="${tid}"]`);
-            if (!btn) return '';
-            return btn.getAttribute('aria-label') || btn.innerText || '';
-          };
-          return {
-            likesRaw: get('like'),
-            repliesRaw: get('reply'),
-            retweetsRaw: get('retweet')
-          };
-        });
-
-        const likes = parseCount(raw.likesRaw);
-        const replies = parseCount(raw.repliesRaw);
-        const retweets = parseCount(raw.retweetsRaw);
-
-        if (likes === 0 && replies === 0 && retweets === 0) {
-          return { err: 'ZERO_READ' };
-        }
-
-        return { likes, replies, retweets };
-      } catch (e) {
-        return { err: e && e.name === 'TimeoutError' ? 'TIMEOUT' : (e.message || 'ERROR') };
-      } finally {
-        try { await page.close(); } catch {}
-      }
-    };
-
-    // Desktop
-    const first = await attemptOnce(url);
-    if (!first.err) return first;
-
-    // Mobile fallback
-    const second = await attemptOnce(toMobileUrl(url));
-    if (!second.err) return second;
-
-    const errType = second.err || first.err || 'ERROR';
-    if (process.env.DEBUG_FETCH) {
-      console.error('[fetchMetrics] fail types:', first.err, '→', second.err);
+      return { likes, replies, retweets };
+    } catch (e) {
+      console.error('Error fetching metrics:', e);
+      return { likes: 0, replies: 0, retweets: 0 };
+    } finally {
+      try { await page.close(); } catch {}
     }
-    return { likes: 0, replies: 0, retweets: 0, err: errType };
   }
 
-  // ======= Processamento de um raid (com backoff) =======
+  // ======= NOVO: Corpo de processamento de um raid isolado =======
   async function pollOneRaid(chatId, raid) {
-    const now = Date.now();
-    if (raid.backoffMs && now - raid.lastAttempt < raid.backoffMs) {
-      return; // respeita backoff
-    }
-
     raid.pollCount++;
-    raid.lastAttempt = now;
-    console.log(`[Polling] #${raid.pollCount} for ${raid.tweetUrl} (backoff=${raid.backoffMs}ms)`);
+    console.log(`[Polling] #${raid.pollCount} for ${raid.tweetUrl}`);
 
-    const res = await withSlot(() => fetchMetrics(raid.tweetUrl));
-    if (res.err) {
-      const prev = raid.backoffMs || 0;
-      const next = Math.min(Math.max(30000, prev ? prev * 2 : 30000), 10 * 60 * 1000); // 30s → ... → 10m
-      raid.backoffMs = next;
-      console.warn(`[Raid ${chatId}] fetch err=${res.err} → backoff=${raid.backoffMs}ms`);
-      return;
-    }
-
-    // Sucesso: zera backoff
-    raid.backoffMs = 0;
-
-    const { likes: L, replies: R, retweets: T } = res;
+    const cur = await withSlot(() => fetchMetrics(raid.tweetUrl));
+    const { likes: L, replies: R, retweets: T } = cur;
     const { likes: LT, replies: RT, retweets: TT } = raid.targets;
     const done = L >= LT && R >= RT && T >= TT;
 
@@ -665,10 +583,11 @@ To get featured in trending:
       const score = sumTargets / Math.max(durationSec, 1);
 
       if (!Array.isArray(stats[chatId])) stats[chatId] = [];
+      // Mantém compatibilidade, mas salve com time quando possível
       stats[chatId].push({ score, time: Date.now() });
       saveStats();
 
-      const cap = buildCaption(res, raid.targets, ['✔️ Singularity achieved. All parameters at maximum.'], raid.tweetUrl);
+      const cap = buildCaption(cur, raid.targets, ['✔️ Singularity achieved. All parameters at maximum.'], raid.tweetUrl);
       await bot.deleteMessage(chatId, raid.statusMessageId).catch(() => {});
       await bot.sendVideo(chatId, RAID_COMPLETE_GIF, {
         ...MARKDOWN,
@@ -690,8 +609,9 @@ To get featured in trending:
         raid.delayNotified = true;
       }
 
-      const cap = buildCaption(res, raid.targets, phrases, raid.tweetUrl);
+      const cap = buildCaption(cur, raid.targets, phrases, raid.tweetUrl);
       await bot.deleteMessage(chatId, raid.statusMessageId).catch(() => {});
+
       const newVid = await bot.sendVideo(chatId, RAID_START_GIF, {
         ...MARKDOWN,
         supports_streaming: true,
@@ -702,11 +622,12 @@ To get featured in trending:
           ]]
         }
       });
+
       raid.statusMessageId = newVid.message_id;
     }
   }
 
-  // Lock para evitar sobreposição do loop
+  // ======= NOVO: Lock para evitar sobreposição do loop =======
   let polling = false;
   async function pollLoop() {
     if (polling) return;
@@ -720,9 +641,9 @@ To get featured in trending:
     }
   }
 
-  // Scheduler com jitter
+  // ======= NOVO: Scheduler com jitter para não bater padrão exato =======
   const BASE = POLL_MS;
-  const JITTER = process.env.POLL_JITTER_MS ? Number(process.env.POLL_JITTER_MS) : 5000; // ±5s
+  const JITTER = 5000; // ±5s
   const nextDelay = () => BASE + Math.floor((Math.random() * 2 - 1) * JITTER);
 
   async function scheduler() {
