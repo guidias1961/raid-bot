@@ -13,22 +13,67 @@ const TREND_CH = process.env.TRENDING_CHANNEL_ID;
 const STATS_FILE = './raid-stats.json';
 const GROUP_LINKS_FILE = './group-links.json';
 
+// ======= NOVO: Controle de concorrência =======
+const CONCURRENCY = process.env.SCRAPE_CONCURRENCY ? Number(process.env.SCRAPE_CONCURRENCY) : 2;
+let inFlight = 0;
+const queue = [];
+async function withSlot(fn) {
+  if (inFlight >= CONCURRENCY) {
+    await new Promise(res => queue.push(res));
+  }
+  inFlight++;
+  try { return await fn(); }
+  finally {
+    inFlight--;
+    const next = queue.shift();
+    if (next) next();
+  }
+}
+
+// ======= NOVO: Parser robusto para contagens (K/M/pt-BR) =======
+function parseCount(raw) {
+  if (!raw) return 0;
+  let t = String(raw).trim().toLowerCase();
+
+  // Normaliza pt-BR → en
+  t = t
+    .replace(/\s+/g, ' ')
+    .replace(/milhões|milhao|milhão|mi/g, 'm')
+    .replace(/mil/g, 'k');
+
+  // Troca decimal vírgula → ponto
+  t = t.replace(/(\d),(\d)/g, '$1.$2');
+
+  // Pega "número + sufixo opcional"
+  const m = t.match(/([\d.]+)\s*([kmb])?/i);
+  if (!m) {
+    const digits = t.replace(/[^\d]/g, '');
+    return digits ? parseInt(digits, 10) : 0;
+  }
+  let n = parseFloat(m[1]);
+  const suf = (m[2] || '').toLowerCase();
+  if (suf === 'k') n *= 1e3;
+  else if (suf === 'm') n *= 1e6;
+  else if (suf === 'b') n *= 1e9;
+  return Math.round(n);
+}
+
 // Initialize data stores
 let stats = {};
 let groupLinks = {};
 
 // Load existing data from files
 if (fs.existsSync(STATS_FILE)) {
-  try { 
-    stats = JSON.parse(fs.readFileSync(STATS_FILE)); 
+  try {
+    stats = JSON.parse(fs.readFileSync(STATS_FILE));
   } catch (e) {
     console.error('Error loading stats:', e);
   }
 }
 
 if (fs.existsSync(GROUP_LINKS_FILE)) {
-  try { 
-    groupLinks = JSON.parse(fs.readFileSync(GROUP_LINKS_FILE)); 
+  try {
+    groupLinks = JSON.parse(fs.readFileSync(GROUP_LINKS_FILE));
   } catch (e) {
     console.error('Error loading group links:', e);
   }
@@ -52,29 +97,54 @@ function saveGroupLinks() {
     process.exit(1);
   }
 
+  // ======= NOVO: Função para abrir página com UA/locale e bloqueio de mídia =======
+  async function newPage(browser) {
+    const page = await browser.newPage();
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    );
+    await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
+    await page.setViewport({ width: 1366, height: 900 });
+    await page.setRequestInterception(true);
+    page.on('request', req => {
+      const type = req.resourceType();
+      if (type === 'image' || type === 'media' || type === 'font') req.abort();
+      else req.continue();
+    });
+    return page;
+  }
+
   // Launch browser for scraping
   let browser;
-  try {
-    browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    });
-  } catch (err) {
-    console.error('Failed to launch browser:', err);
-    process.exit(1);
+  async function ensureBrowser() {
+    if (browser && browser.isConnected()) return browser;
+    try {
+      if (browser) {
+        try { await browser.close(); } catch {}
+      }
+      browser = await puppeteer.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+      });
+      return browser;
+    } catch (err) {
+      console.error('Failed to launch browser:', err);
+      process.exit(1);
+    }
   }
+  await ensureBrowser();
 
   console.log('✅ Bot ready');
   const bot = new TelegramBot(TOKEN, { polling: true });
   const raids = new Map();
 
   // Set bot commands for auto-complete
-await bot.setMyCommands([
-  { command: 'raid', description: 'Start a new raid' },
-  { command: 'cancel', description: 'Cancel current raid' },
-  { command: 'tutorial', description: 'How to use the bot' },
-  { command: 'setgrouplink', description: 'Set group invite link' }
-]);
+  await bot.setMyCommands([
+    { command: 'raid', description: 'Start a new raid' },
+    { command: 'cancel', description: 'Cancel current raid' },
+    { command: 'tutorial', description: 'How to use the bot' },
+    { command: 'setgrouplink', description: 'Set group invite link' }
+  ]);
 
   // Constants for messages and media
   const MARKDOWN = { parse_mode: 'HTML', disable_web_page_preview: false };
@@ -102,12 +172,6 @@ await bot.setMyCommands([
     '⏳ Temporal constraints exceeded predicted window. Accelerating algorithms.',
     '⏳ Latency detected. Boosting computational threads.',
     '⏳ Processing lag detected. Redirecting resources.'
-  ];
-
-  const completionPhrases = [
-    '✔️ Singularity achieved. All parameters at maximum.',
-    '✔️ System convergence complete. Optimal state reached.',
-    '✔️ Convergence successful. Maximum throughput sustained.'
   ];
 
   // Tutorial message template
@@ -158,19 +222,19 @@ To get featured in trending:
       ['Replies', cur.replies, tgt.replies || 0],
       ['Retweets', cur.retweets, tgt.retweets || 0]
     ];
-    
+
     const labelWidth = Math.max(...rows.map(r => r[0].length));
     const countStrings = rows.map(r => `${r[1]}/${r[2]}`);
     const countWidth = Math.max(...countStrings.map(s => s.length));
     const pctWidth = 4;
-    
+
     return rows.map(([label, c, t]) => {
       const labelCol = label.padEnd(labelWidth);
       const countRaw = `${c}/${t}`;
       const countCol = countRaw.padStart(countWidth);
-      const pctNum = t === 0 ? 100 : Math.min((c / t)*100, 100);
+      const pctNum = t === 0 ? 100 : Math.min((c / t) * 100, 100);
       const pctRaw = `${pctNum.toFixed(0)}%`.padStart(pctWidth);
-      return `${getColorSquare(c,t)} ${labelCol} | ${countCol} ${pctRaw}`;
+      return `${getColorSquare(c, t)} ${labelCol} | ${countCol} ${pctRaw}`;
     }).join('\n');
   }
 
@@ -191,8 +255,6 @@ To get featured in trending:
     const tweetId = match[1];
     return `https://x.com/i/status/${tweetId}`;
   }
-
-  // Command handlers...
 
   // Start command
   bot.onText(/\/start/, msg => {
@@ -226,9 +288,8 @@ To get featured in trending:
     const chatId = msg.chat.id;
     const link = match[2] ? match[2].trim() : '';
 
-    // If no link provided, show instructions
     if (!link) {
-      return bot.sendMessage(chatId, 
+      return bot.sendMessage(chatId,
         `📌 <b>How to set your group link:</b>\n\n` +
         `1. Go to group settings > Invite Links > Create invite link\n` +
         `2. Copy the generated link (example: https://t.me/yourgroup)\n` +
@@ -238,10 +299,9 @@ To get featured in trending:
         MARKDOWN
       ).catch(e => console.error('Failed to send instructions:', e));
     }
-    
-    // Validate link format
+
     if (!link.startsWith('https://t.me/') && !link.startsWith('https://telegram.me/')) {
-      return bot.sendMessage(chatId, 
+      return bot.sendMessage(chatId,
         '❌ Invalid Telegram group link format.\n' +
         'Please use: <code>https://t.me/groupname</code>\n\n' +
         'Make sure you:\n' +
@@ -251,23 +311,22 @@ To get featured in trending:
       ).catch(e => console.error('Failed to send error:', e));
     }
 
-    // Save the link
     try {
       groupLinks[chatId] = link;
       saveGroupLinks();
-      
+
       const groupName = msg.chat.title || 'Your Group';
-      await bot.sendMessage(chatId, 
+      await bot.sendMessage(chatId,
         `✅ <b>Group link successfully set!</b>\n\n` +
         `Your group will appear as:\n` +
         `<a href="${link}">${groupName}</a>\n\n` +
         `On the trending leaderboard!`,
         MARKDOWN
       ).catch(e => console.error('Failed to send success:', e));
-      
+
     } catch (e) {
       console.error('Error saving group link:', e);
-      bot.sendMessage(chatId, 
+      bot.sendMessage(chatId,
         '❌ Failed to save group link. Please try again later.',
         MARKDOWN
       ).catch(e => console.error('Failed to send error:', e));
@@ -279,7 +338,7 @@ To get featured in trending:
     const newMembers = msg.new_chat_members;
     const me = await bot.getMe();
     const wasBotAdded = newMembers.some(member => member.id === me.id);
-    
+
     if (wasBotAdded) {
       setTimeout(() => {
         bot.sendVideo(msg.chat.id, WELCOME_GIF, {
@@ -300,7 +359,7 @@ To get featured in trending:
   // Callback query handler
   bot.on('callback_query', async query => {
     const chatId = query.message.chat.id;
-    
+
     if (query.data === 'tutorial') {
       bot.answerCallbackQuery(query.id);
       bot.sendVideo(chatId, TUTORIAL_GIF, {
@@ -311,7 +370,7 @@ To get featured in trending:
     }
     else if (query.data === 'setlink_instructions') {
       bot.answerCallbackQuery(query.id);
-      bot.sendMessage(chatId, 
+      bot.sendMessage(chatId,
         `📌 <b>How to set group link:</b>\n\n` +
         `1. Create invite link (Group Settings > Invite Links)\n` +
         `2. Use:\n<code>/setgrouplink https://t.me/yourgroup</code>\n\n` +
@@ -325,8 +384,7 @@ To get featured in trending:
   bot.onText(/\/raid(@SingRaidBot)?\s*(.*)/, async (msg, match) => {
     const chatId = msg.chat.id;
     const args = match[2] ? match[2].trim().split(/\s+/) : [];
-    
-    // If not enough arguments, show instructions
+
     if (args.length < 4) {
       return bot.sendMessage(chatId,
         `⚡ <b>How to start a raid:</b>\n\n` +
@@ -347,15 +405,15 @@ To get featured in trending:
     if (raids.has(chatId)) {
       return bot.sendMessage(chatId, '🚫 Active raid exists. Use /cancel.', MARKDOWN);
     }
-    
+
     const [url, likeT, replyT, retweetT] = args;
     const formattedUrl = formatTwitterUrl(url);
-    const targets = { 
-      likes: +likeT, 
-      replies: +replyT, 
-      retweets: +retweetT 
+    const targets = {
+      likes: +likeT,
+      replies: +replyT,
+      retweets: +retweetT
     };
-    
+
     raids.set(chatId, {
       tweetUrl: formattedUrl,
       targets,
@@ -378,16 +436,16 @@ To get featured in trending:
         ]]
       }
     });
-    
+
     raids.get(chatId).statusMessageId = sent.message_id;
 
     if (TREND_CH) {
       const name = msg.chat.title || msg.chat.username || chatId;
       const metrics = `Likes:${targets.likes}, Replies:${targets.replies}, Retweets:${targets.retweets}`;
       const notif = `<b>🚀 Raid Started</b>\nGroup: <b>${name}</b>\nPost: ${formattedUrl}\nTargets: ${metrics}`;
-      bot.sendMessage(TREND_CH, notif, { 
-        parse_mode: 'HTML', 
-        disable_web_page_preview: false 
+      bot.sendMessage(TREND_CH, notif, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: false
       });
     }
   });
@@ -402,30 +460,25 @@ To get featured in trending:
     }
   });
 
-
   // Post trending leaderboard with decay after 1 hour
   async function postTrending(chatId, pin = false) {
     const now = Date.now();
-    const decayWindowMs = 3600000; // 1 hour in milliseconds
+    const decayWindowMs = 3600000; // 1 hour
 
     const summary = Object.entries(stats)
       .map(([id, entries]) => {
         const total = entries.reduce((acc, entry) => {
           let score, time;
-          // Backward compatibility: if entry is just a number
           if (typeof entry === 'number') {
             score = entry;
-            time = now; // don't apply decay
+            time = now; // sem decaimento retroativo
           } else {
             ({ score, time } = entry);
           }
-
           const ageMs = now - time;
-          // Decay factor: 1.0 → 0.5 → 0.25 → ... every 1h
           const decayFactor = ageMs >= decayWindowMs
             ? 0.5 ** (ageMs / decayWindowMs)
             : 1;
-
           return acc + score * decayFactor;
         }, 0);
         return { id, total };
@@ -472,105 +525,135 @@ To get featured in trending:
     }
   }
 
-  // Fetch Twitter metrics
+  // ======= NOVO: fetchMetrics com aria-label, UA/locale e waits robustos =======
   async function fetchMetrics(url) {
-    if (!browser.isConnected()) {
-      await browser.close().catch(() => {});
-      browser = await puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-      });
-    }
-    
-    const page = await browser.newPage();
+    await ensureBrowser();
+    const page = await newPage(browser);
     try {
-      await page.goto(url, { 
-        waitUntil: 'domcontentloaded', 
-        timeout: 30000 
-      });
-      await page.waitForSelector('article', { timeout: 10000 });
-      
-      return await page.evaluate(() => {
-        const g = sel => {
-          const e = document.querySelector(sel);
-          return e ? parseInt(e.innerText.replace(/[^\d]/g, ''), 10) || 0 : 0;
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+      // Garante renderização de um tweet
+      await page.waitForSelector('article', { timeout: 15000 });
+
+      // Aguarda hidratação dos botões com aria-label
+      await page.waitForSelector(
+        '[data-testid="like"][aria-label], [data-testid="retweet"][aria-label], [data-testid="reply"][aria-label]',
+        { timeout: 15000 }
+      );
+
+      const raw = await page.evaluate(() => {
+        const get = (tid) => {
+          const btn = document.querySelector(`[data-testid="${tid}"]`);
+          if (!btn) return '';
+          return btn.getAttribute('aria-label') || btn.innerText || '';
         };
-        
         return {
-          likes: g('[data-testid="like"]'),
-          replies: g('[data-testid="reply"]'),
-          retweets: g('[data-testid="retweet"]')
+          likesRaw: get('like'),
+          repliesRaw: get('reply'),
+          retweetsRaw: get('retweet')
         };
       });
+
+      const likes = parseCount(raw.likesRaw);
+      const replies = parseCount(raw.repliesRaw);
+      const retweets = parseCount(raw.retweetsRaw);
+
+      return { likes, replies, retweets };
     } catch (e) {
       console.error('Error fetching metrics:', e);
       return { likes: 0, replies: 0, retweets: 0 };
     } finally {
-      await page.close().catch(() => {});
+      try { await page.close(); } catch {}
     }
   }
 
-  // Polling loop for active raids
-  async function pollLoop() {
-    for (const [chatId, raid] of raids.entries()) {
-      raid.pollCount++;
-      console.log(`[Polling] #${raid.pollCount} for ${raid.tweetUrl}`);
+  // ======= NOVO: Corpo de processamento de um raid isolado =======
+  async function pollOneRaid(chatId, raid) {
+    raid.pollCount++;
+    console.log(`[Polling] #${raid.pollCount} for ${raid.tweetUrl}`);
 
-      const cur = await fetchMetrics(raid.tweetUrl);
-      const { likes: L, replies: R, retweets: T } = cur;
-      const { likes: LT, replies: RT, retweets: TT } = raid.targets;
-      const done = L >= LT && R >= RT && T >= TT;
+    const cur = await withSlot(() => fetchMetrics(raid.tweetUrl));
+    const { likes: L, replies: R, retweets: T } = cur;
+    const { likes: LT, replies: RT, retweets: TT } = raid.targets;
+    const done = L >= LT && R >= RT && T >= TT;
 
-      if (done) {
-        const durationSec = (Date.now() - raid.startTime) / 1000;
-        const sumTargets = LT + RT + TT;
-        const score = sumTargets / durationSec;
-        
-        if (!Array.isArray(stats[chatId])) stats[chatId] = [];
-        stats[chatId].push(score);
-        saveStats();
+    if (done) {
+      const durationSec = (Date.now() - raid.startTime) / 1000;
+      const sumTargets = LT + RT + TT;
+      const score = sumTargets / Math.max(durationSec, 1);
 
-        const cap = buildCaption(cur, raid.targets, completionPhrases, raid.tweetUrl);
-        await bot.deleteMessage(chatId, raid.statusMessageId).catch(() => {});
-        await bot.sendVideo(chatId, RAID_COMPLETE_GIF, {
-          ...MARKDOWN,
-          supports_streaming: true,
-          caption: cap
-        });
+      if (!Array.isArray(stats[chatId])) stats[chatId] = [];
+      // Mantém compatibilidade, mas salve com time quando possível
+      stats[chatId].push({ score, time: Date.now() });
+      saveStats();
 
-        if (TREND_CH) await postTrending(TREND_CH, true);
-        raids.delete(chatId);
-      } else {
-        const avg = ((L / (LT||1)) + (R / (RT||1)) + (T / (TT||1))) / 3 * 100;
-        let phrases = updatePhrases;
-        
-        if (!raid.halfwayNotified && avg >= 50) {
-          phrases = halfwayPhrases;
-          raid.halfwayNotified = true;
-        } else if (!raid.delayNotified && raid.pollCount * POLL_MS > 300000) {
-          phrases = delayPhrases;
-          raid.delayNotified = true;
-        }
-        
-        const cap = buildCaption(cur, raid.targets, phrases, raid.tweetUrl);
-        await bot.deleteMessage(chatId, raid.statusMessageId).catch(() => {});
-        
-        const newVid = await bot.sendVideo(chatId, RAID_START_GIF, {
-          ...MARKDOWN,
-          supports_streaming: true,
-          caption: cap,
-          reply_markup: {
-            inline_keyboard: [[
-              { text: '🏆 View Trending', url: 'https://t.me/SingRaidTrending' }
-            ]]
-          }
-        });
-        
-        raid.statusMessageId = newVid.message_id;
+      const cap = buildCaption(cur, raid.targets, ['✔️ Singularity achieved. All parameters at maximum.'], raid.tweetUrl);
+      await bot.deleteMessage(chatId, raid.statusMessageId).catch(() => {});
+      await bot.sendVideo(chatId, RAID_COMPLETE_GIF, {
+        ...MARKDOWN,
+        supports_streaming: true,
+        caption: cap
+      });
+
+      if (TREND_CH) await postTrending(TREND_CH, true);
+      raids.delete(chatId);
+    } else {
+      const avg = ((L / (LT || 1)) + (R / (RT || 1)) + (T / (TT || 1))) / 3 * 100;
+      let phrases = updatePhrases;
+
+      if (!raid.halfwayNotified && avg >= 50) {
+        phrases = halfwayPhrases;
+        raid.halfwayNotified = true;
+      } else if (!raid.delayNotified && raid.pollCount * POLL_MS > 300000) { // >5min
+        phrases = delayPhrases;
+        raid.delayNotified = true;
       }
+
+      const cap = buildCaption(cur, raid.targets, phrases, raid.tweetUrl);
+      await bot.deleteMessage(chatId, raid.statusMessageId).catch(() => {});
+
+      const newVid = await bot.sendVideo(chatId, RAID_START_GIF, {
+        ...MARKDOWN,
+        supports_streaming: true,
+        caption: cap,
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '🏆 View Trending', url: 'https://t.me/SingRaidTrending' }
+          ]]
+        }
+      });
+
+      raid.statusMessageId = newVid.message_id;
     }
   }
 
-  // Start polling loop
-  setInterval(pollLoop, POLL_MS);
+  // ======= NOVO: Lock para evitar sobreposição do loop =======
+  let polling = false;
+  async function pollLoop() {
+    if (polling) return;
+    polling = true;
+    try {
+      for (const [chatId, raid] of raids.entries()) {
+        await pollOneRaid(chatId, raid);
+      }
+    } finally {
+      polling = false;
+    }
+  }
+
+  // ======= NOVO: Scheduler com jitter para não bater padrão exato =======
+  const BASE = POLL_MS;
+  const JITTER = 5000; // ±5s
+  const nextDelay = () => BASE + Math.floor((Math.random() * 2 - 1) * JITTER);
+
+  async function scheduler() {
+    try {
+      await pollLoop();
+    } catch (e) {
+      console.error('scheduler error:', e);
+    } finally {
+      setTimeout(scheduler, nextDelay());
+    }
+  }
+  scheduler();
 })();
